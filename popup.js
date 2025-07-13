@@ -347,7 +347,7 @@ function handleRemindSelected() {
     const selectedMemories = allMemoriesCache.filter(m => selectedIds.includes(m.id));
     
     let memoryText = selectedMemories.map(m => `Title: ${m.title}\nInfo: ${m.info}`).join('\n\n---\n\n');
-    const remindPrompt = `[CONTEXT_UPDATE]\nThe following are specific memories I've selected from our previous conversations. I am providing them to restore your context. Read and internalize them.\n\nOnce you have processed this information, your ONLY response should be: "Understood. My context is updated. Please proceed."\n\n--- START MEMORIES ---\n\n${memoryText}\n\n--- END MEMORIES ---\n\nNow, provide only the confirmation message and await my next real prompt.`;
+    const remindPrompt = `[CONTEXT_UPDATE]\nThe following are specific memories I've selected from our previous conversations. I am providing them to restore your context. Read and internalize them.\n\nOnce you have processed this information, your ONLY response should be: "How can I help you today?"\n\n--- START MEMORIES ---\n\n${memoryText}\n\n--- END MEMORIES ---\n\nNow, provide only the confirmation message and await my next real prompt.`;
     sendMessageToContentScript({ action: 'remind', prompt: remindPrompt });
 }
 

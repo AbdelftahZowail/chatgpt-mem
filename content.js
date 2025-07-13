@@ -119,27 +119,72 @@ function getMemoriesForCategory(categoryName, callback) {
     });
 }
 
+// --- Debounced multi-category reminder logic ---
+let selectedCategories = new Set();
+let remindDebounceTimer = null;
+let remindDebounceSession = 0;
+
 function remindForCategory(categoryName) {
-    getMemoriesForCategory(categoryName, (memoriesToRemind) => {
-        if (memoriesToRemind.length > 0) {
-            console.log(`Reminding ChatGPT of ${memoriesToRemind.length} memories in '${categoryName}' category.`);
-            let memoryText = memoriesToRemind.map(m => `Title: ${m.title}\nInfo: ${m.info}`).join('\n\n---\n\n');
-            const remindPrompt = `[CONTEXT_UPDATE]\nThe following are memories of our previous conversations under the category "${categoryName}". I am providing them to restore your context. Read and internalize them. Do not treat this as a question or a task.\n\nOnce you have processed this information, your ONLY response should be: "Understood. My context is updated. Please proceed."\n\n--- START MEMORIES ---\n\n${memoryText}\n\n--- END MEMORIES ---\n\nNow, provide only the confirmation message and await my next real prompt.`;
-            sendPromptToChatGPT(remindPrompt);
-        } else {
-            console.log(`No memories found for category: ${categoryName}`);
+    selectedCategories.add(categoryName);
+    if (remindDebounceTimer) {
+        clearTimeout(remindDebounceTimer);
+    }
+    remindDebounceSession++;
+    const thisSession = remindDebounceSession;
+    remindDebounceTimer = setTimeout(() => {
+        // Gather all memories for all selected categories
+        const categoriesToRemind = Array.from(selectedCategories);
+        let allMemories = [];
+        let categoriesProcessed = 0;
+        if (categoriesToRemind.length === 0) {
+            remindDebounceTimer = null;
+            return;
         }
-    });
+        categoriesToRemind.forEach(cat => {
+            getMemoriesForCategory(cat, (memoriesToRemind) => {
+                // If a new session started, ignore this callback
+                if (thisSession !== remindDebounceSession) return;
+                if (memoriesToRemind.length > 0) {
+                    allMemories.push({
+                        category: cat,
+                        memories: memoriesToRemind
+                    });
+                }
+                categoriesProcessed++;
+                if (categoriesProcessed === categoriesToRemind.length) {
+                    // All categories processed, now send the combined reminder
+                    if (allMemories.length > 0) {
+                        let memoryText = allMemories.map(group => {
+                            return `Category: ${group.category}\n` + group.memories.map(m => `Title: ${m.title}\nInfo: ${m.info}`).join('\n\n---\n\n');
+                        }).join('\n\n====================\n\n');
+                        const remindPrompt = `[CONTEXT_UPDATE]\nThe following are memories of our previous conversations under the categories: ${categoriesToRemind.join(", ")}. I am providing them to restore your context. Read and internalize them. Do not treat this as a question or a task.\n\nOnce you have processed this information, your ONLY response should be: "How can I help you today?"\n\n--- START MEMORIES ---\n\n${memoryText}\n\n--- END MEMORIES ---\n\nNow, provide only the confirmation message and await my next real prompt.`;
+                        sendPromptToChatGPT(remindPrompt);
+                    } else {
+                        console.log(`No memories found for selected categories: ${categoriesToRemind.join(", ")}`);
+                    }
+                    selectedCategories.clear();
+                    remindDebounceTimer = null;
+                }
+            });
+        });
+    }, 1000);
 }
 
 function injectCategoryRemindersUI() {
     const widgetId = 'memory-bank-widget-container';
     if (document.getElementById(widgetId)) return;
 
-    chrome.storage.local.get(['memory_categories'], result => {
-        const categories = result.memory_categories || ['default'];
 
-        // --- CHANGED: Create a main container for positioning and hover ---
+    chrome.storage.local.get(['memory_categories', 'memories'], result => {
+        const allMemories = result.memories || [];
+        const categories = (result.memory_categories || ['default'])
+            .map(cat => {
+                const count = allMemories.filter(m => m.categories && m.categories.includes(cat)).length;
+                return { name: cat, count };
+            })
+            .filter(catObj => catObj.count > 0);
+        if (categories.length === 0) return; // No categories with memories
+
         const mainContainer = document.createElement('div');
         mainContainer.id = widgetId;
         mainContainer.style.position = 'fixed';
@@ -147,7 +192,6 @@ function injectCategoryRemindersUI() {
         mainContainer.style.right = '0';
         mainContainer.style.transform = 'translateY(-50%)';
         mainContainer.style.zIndex = '1001';
-        // --- NEW: This padding creates the gap without being a dead zone ---
         mainContainer.style.padding = '10px'; 
         mainContainer.style.display = 'flex';
         mainContainer.style.alignItems = 'center';
@@ -158,17 +202,16 @@ function injectCategoryRemindersUI() {
         widgetButton.style.backgroundColor = '#2a2a31';
         widgetButton.style.color = '#ececf1';
         widgetButton.style.border = '1px solid #4a4a58';
-        widgetButton.style.borderRadius = '8px'; // Can be fully rounded now
+        widgetButton.style.borderRadius = '8px';
         widgetButton.style.width = '44px';
         widgetButton.style.height = '44px';
         widgetButton.style.fontSize = '24px';
         widgetButton.style.cursor = 'pointer';
         widgetButton.style.boxShadow = '0 2px 10px rgba(0,0,0,0.2)';
-        
+
         const dropdown = document.createElement('div');
         dropdown.className = 'memory-bank-dropdown';
-        dropdown.style.display = 'none'; // Initially hidden
-        // --- CHANGED: No longer needs absolute positioning relative to the page ---
+        dropdown.style.display = 'none';
         dropdown.style.marginRight = '10px';
         dropdown.style.backgroundColor = '#2a2a31';
         dropdown.style.border = '1px solid #4a4a58';
@@ -176,8 +219,131 @@ function injectCategoryRemindersUI() {
         dropdown.style.padding = '8px';
         dropdown.style.minWidth = '200px';
         dropdown.style.boxShadow = '0 2px 10px rgba(0,0,0,0.2)';
-        
-        categories.forEach(cat => {
+
+        // --- ALWAYS VISIBLE: Circular Timer Indicator (smaller, left) ---
+        const indicator = document.createElement('div');
+        indicator.style.display = 'flex';
+        indicator.style.justifyContent = 'center';
+        indicator.style.alignItems = 'center';
+        indicator.style.marginRight = '12px';
+        indicator.style.height = '24px';
+        indicator.style.width = '24px';
+        indicator.style.flexShrink = '0';
+        indicator.style.position = 'absolute';
+        indicator.style.left = '-36px';
+        indicator.style.top = '12px';
+        indicator.style.background = 'none';
+        dropdown.style.position = 'relative';
+        dropdown.appendChild(indicator);
+
+        // SVG Circular Progress (smaller)
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('width', '24');
+        svg.setAttribute('height', '24');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.style.display = 'block';
+        svg.style.margin = '0 auto';
+        const bgCircle = document.createElementNS(svgNS, 'circle');
+        bgCircle.setAttribute('cx', '12');
+        bgCircle.setAttribute('cy', '12');
+        bgCircle.setAttribute('r', '10');
+        bgCircle.setAttribute('stroke', '#444');
+        bgCircle.setAttribute('stroke-width', '3');
+        bgCircle.setAttribute('fill', 'none');
+        svg.appendChild(bgCircle);
+        const fgCircle = document.createElementNS(svgNS, 'circle');
+        fgCircle.setAttribute('cx', '12');
+        fgCircle.setAttribute('cy', '12');
+        fgCircle.setAttribute('r', '10');
+        fgCircle.setAttribute('stroke', '#ffe082');
+        fgCircle.setAttribute('stroke-width', '3');
+        fgCircle.setAttribute('fill', 'none');
+        fgCircle.setAttribute('stroke-linecap', 'round');
+        fgCircle.setAttribute('transform', 'rotate(-90 12 12)');
+        fgCircle.setAttribute('stroke-dasharray', 2 * Math.PI * 10);
+        fgCircle.setAttribute('stroke-dashoffset', 0);
+        svg.appendChild(fgCircle);
+        // Timer text
+        const timerText = document.createElementNS(svgNS, 'text');
+        timerText.setAttribute('x', '12');
+        timerText.setAttribute('y', '16');
+        timerText.setAttribute('text-anchor', 'middle');
+        timerText.setAttribute('font-size', '9');
+        timerText.setAttribute('fill', '#ffe082');
+        timerText.textContent = '1.0';
+        svg.appendChild(timerText);
+        indicator.appendChild(svg);
+
+        // --- Timer update logic ---
+        let timerInterval = null;
+        let remaining = 1.0;
+        function resetIndicator() {
+            remaining = 1.0;
+            timerText.textContent = remaining.toFixed(1);
+            const totalLen = 2 * Math.PI * 10;
+            fgCircle.setAttribute('stroke-dasharray', totalLen);
+            fgCircle.setAttribute('stroke-dashoffset', 0);
+        }
+        function startIndicator() {
+            resetIndicator();
+            if (timerInterval) clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                if (dropdown.style.display === 'none') {
+                    clearInterval(timerInterval);
+                    return;
+                }
+                remaining -= 0.1;
+                if (remaining <= 0) {
+                    timerText.textContent = '0.0';
+                    fgCircle.setAttribute('stroke-dashoffset', 2 * Math.PI * 10);
+                    clearInterval(timerInterval);
+                } else {
+                    timerText.textContent = remaining.toFixed(1);
+                    fgCircle.setAttribute('stroke-dashoffset', (2 * Math.PI * 10) * (1 - remaining / 1.0));
+                }
+            }, 100);
+        }
+
+        // --- Patch remindForCategory to start indicator and update button styles ---
+        const origRemindForCategory = remindForCategory;
+        remindForCategory = function(categoryName) {
+            origRemindForCategory(categoryName);
+            resetIndicator();
+            startIndicator();
+            updateButtonStyles();
+        };
+
+        // --- Track and style selected buttons ---
+        let buttonMap = new Map();
+        function updateButtonStyles() {
+            buttonMap.forEach((btn, cat) => {
+                if (selectedCategories.has(cat)) {
+                    btn.style.backgroundColor = '#ffe082';
+                    btn.style.color = '#2a2a31';
+                    btn.style.fontWeight = 'bold';
+                    btn.style.boxShadow = '0 0 0 2px #ffe08255';
+                } else {
+                    btn.style.backgroundColor = '#393945';
+                    btn.style.color = '#fff';
+                    btn.style.fontWeight = 'normal';
+                    btn.style.boxShadow = 'none';
+                }
+            });
+        }
+
+        // --- Reset selection and indicator on popup open ---
+        function resetSelectionAndIndicator() {
+            selectedCategories.clear();
+            updateButtonStyles();
+            resetIndicator();
+        }
+
+        // Show timer always, reset on open
+        resetIndicator();
+        indicator.style.display = 'flex';
+
+        categories.forEach(catObj => {
             const item = document.createElement('div');
             item.style.display = 'flex';
             item.style.justifyContent = 'space-between';
@@ -185,11 +351,11 @@ function injectCategoryRemindersUI() {
             item.style.padding = '6px';
             item.style.color = '#ececf1';
             const catName = document.createElement('span');
-            catName.innerText = cat;
+            catName.innerText = `${catObj.name} (${catObj.count})`;
             item.appendChild(catName);
             const remindBtn = document.createElement('button');
             remindBtn.innerText = 'Remind';
-            remindBtn.dataset.category = cat;
+            remindBtn.dataset.category = catObj.name;
             remindBtn.style.marginLeft = '12px';
             remindBtn.style.backgroundColor = '#393945';
             remindBtn.style.color = '#fff';
@@ -203,17 +369,21 @@ function injectCategoryRemindersUI() {
             };
             item.appendChild(remindBtn);
             dropdown.appendChild(item);
+            buttonMap.set(catObj.name, remindBtn);
         });
 
-        // --- CHANGED: Assemble the widget inside the main container ---
-        // Order is reversed for flexbox to place dropdown on the left
         mainContainer.appendChild(dropdown);
         mainContainer.appendChild(widgetButton);
-        
-        // --- CHANGED: Hover events are now on the main container ---
-        mainContainer.onmouseenter = () => { dropdown.style.display = 'block'; };
-        mainContainer.onmouseleave = () => { dropdown.style.display = 'none'; };
-        
+
+        mainContainer.onmouseenter = () => {
+            dropdown.style.display = 'block';
+            resetSelectionAndIndicator();
+        };
+        mainContainer.onmouseleave = () => {
+            dropdown.style.display = 'none';
+            if (timerInterval) clearInterval(timerInterval);
+        };
+
         document.body.appendChild(mainContainer);
         console.log('ChatGPT Memory Ext: On-page widget injected.');
     });
