@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Memory Bank",
-  "version": "1.0",
-  "description": "Saves and recalls important information for ChatGPT conversations.",
+  "version": "1.1",
+  "description": "Saves and recalls important information for ChatGPT conversations using categories.",
   "permissions": [
     "storage",
     "activeTab",
