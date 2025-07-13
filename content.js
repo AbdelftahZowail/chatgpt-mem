@@ -198,7 +198,6 @@ function injectCategoryRemindersUI() {
 
         const widgetButton = document.createElement('button');
         widgetButton.innerText = '🧠';
-        widgetButton.title = 'Memory Bank Categories';
         widgetButton.style.backgroundColor = '#2a2a31';
         widgetButton.style.color = '#ececf1';
         widgetButton.style.border = '1px solid #4a4a58';
