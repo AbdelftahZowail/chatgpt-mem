@@ -218,16 +218,24 @@ function injectCategoryRemindersUI() {
         mainContainer.style.alignItems = 'center';
 
         const widgetButton = document.createElement('button');
-        widgetButton.innerText = '🧠';
         widgetButton.style.backgroundColor = '#2a2a31';
         widgetButton.style.color = '#ececf1';
         widgetButton.style.border = '1px solid #4a4a58';
         widgetButton.style.borderRadius = '8px';
         widgetButton.style.width = '44px';
         widgetButton.style.height = '44px';
-        widgetButton.style.fontSize = '24px';
         widgetButton.style.cursor = 'pointer';
         widgetButton.style.boxShadow = '0 2px 10px rgba(0,0,0,0.2)';
+        widgetButton.style.padding = '0';
+        // Add extension icon instead of emoji
+        const iconImg = document.createElement('img');
+        iconImg.src = chrome.runtime.getURL('icons/icon48.png');
+        iconImg.alt = 'Extension Icon';
+        iconImg.style.width = '28px';
+        iconImg.style.height = '28px';
+        iconImg.style.display = 'block';
+        iconImg.style.margin = '0 auto';
+        widgetButton.appendChild(iconImg);
 
         const dropdown = document.createElement('div');
         dropdown.className = 'memory-bank-dropdown';
