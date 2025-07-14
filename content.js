@@ -6,7 +6,6 @@ function loadProcessedIds() {
     chrome.storage.local.get(['savedMemoryMessageIds'], (result) => {
         if (result.savedMemoryMessageIds && Array.isArray(result.savedMemoryMessageIds)) {
             processedIdsSet = new Set(result.savedMemoryMessageIds);
-            console.log(`ChatGPT Memory Ext: Loaded ${processedIdsSet.size} previously processed message IDs.`);
         }
     });
 }
@@ -43,18 +42,15 @@ function sendPromptToChatGPT(prompt) {
 
 // --- Simplified message processing function ---
 // This function will be called with messageText and messageId from external detection
-function processIncomingMessage(messageText, messageId) {
-    console.log(`ChatGPT Memory Ext: Processing message ID: ${messageId}`);
-    processMessage(messageText, messageId);
-}
 
 // --- Function to process a potential message ---
 function processMessage(messageText, messageId) {
+    console.log('[MemoryExt] processMessage called', { messageId, processed: processedIdsSet.has(messageId) });
     if (!messageId || processedIdsSet.has(messageId)) return;
 
     // Handle [START_MEMORY_EDIT] for updates
     if (messageText.includes('[START_MEMORY_EDIT]') && (messageText.includes('[END_MEMORY_EDIT]'))) {
-        console.log(`ChatGPT Memory Ext: Processing memory update for message ID: ${messageId}`);
+        console.log('[MemoryExt] Detected memory edit block', { messageId });
         const memoryContent = messageText.substring(
             messageText.indexOf('[START_MEMORY_EDIT]') + '[START_MEMORY_EDIT]'.length,
             messageText.indexOf('[END_MEMORY_EDIT]')
@@ -68,7 +64,6 @@ function processMessage(messageText, messageId) {
                 title: titleMatch[1].trim(),
                 info: memoryContent.substring(infoMatch.index + 'Info:'.length).trim(),
                 url: window.location.href,
-                categories: ['default']
             };
             chrome.storage.local.get(['memories', 'savedMemoryMessageIds'], (result) => {
                 let memories = result.memories || [];
@@ -77,14 +72,7 @@ function processMessage(messageText, messageId) {
                 if (idx !== -1) {
                     memories[idx] = { ...memories[idx], ...memoryObj };
                     chrome.storage.local.set({ memories, savedMemoryMessageIds: savedIds }, () => {
-                        console.log('Successfully updated memory (by tag):', memoryObj.id);
                         chrome.runtime.sendMessage({ action: 'memory_updated' });
-                        chrome.notifications.create({
-                            type: 'basic',
-                            iconUrl: 'icons/icon48.png',
-                            title: 'ChatGPT Memory Updated!',
-                            message: `Memory "${memoryObj.title}" was updated.`
-                        });
                     });
                 }
             });
@@ -94,7 +82,7 @@ function processMessage(messageText, messageId) {
     
     // Handle [START_MEMORY] for new memories (or legacy update)
     if (messageText.includes('[START_MEMORY]') && messageText.includes('[END_MEMORY]')) {
-        console.log(`ChatGPT Memory Ext: Processing new memory for message ID: ${messageId}`);
+        console.log('[MemoryExt] Detected new memory block', { messageId });
         if (messageText.includes('[CONTEXT_UPDATE]')) return;
         processedIdsSet.add(messageId);
 
@@ -120,14 +108,7 @@ function processMessage(messageText, messageId) {
                     if (idx !== -1) {
                         memories[idx] = { ...memories[idx], ...memoryObj };
                         chrome.storage.local.set({ memories, savedMemoryMessageIds: savedIds }, () => {
-                            console.log('Successfully updated memory:', window.__memoryUpdateTargetId);
                             chrome.runtime.sendMessage({ action: 'memory_updated' });
-                            chrome.notifications.create({
-                                type: 'basic',
-                                iconUrl: 'icons/icon48.png',
-                                title: 'ChatGPT Memory Updated!',
-                                message: `Memory "${memoryObj.title}" was updated.`
-                            });
                         });
                     }
                     window.__memoryUpdateTargetId = null;
@@ -136,14 +117,7 @@ function processMessage(messageText, messageId) {
                     const newMemory = { id: new Date().toISOString(), ...memoryObj };
                     memories.push(newMemory);
                     chrome.storage.local.set({ memories, savedMemoryMessageIds: savedIds }, () => {
-                        console.log('Successfully saved memory and its ID:', messageId);
                         chrome.runtime.sendMessage({ action: 'memory_created' });
-                        chrome.notifications.create({
-                            type: 'basic',
-                            iconUrl: 'icons/icon48.png',
-                            title: 'ChatGPT Memory Saved!',
-                            message: `Memory "${newMemory.title}" added to 'default' category.`
-                        });
                     });
                 }
             });
@@ -173,7 +147,13 @@ function remindForCategory(categoryName) {
     }
     remindDebounceSession++;
     const thisSession = remindDebounceSession;
-    remindDebounceTimer = setTimeout(() => {
+    // Wait for the text input to appear before running reminder logic
+    function runReminderWhenInputReady() {
+        const inputDiv = document.getElementById('prompt-textarea');
+        if (!inputDiv) {
+            setTimeout(runReminderWhenInputReady, 50);
+            return;
+        }
         // Gather all memories for all selected categories
         const categoriesToRemind = Array.from(selectedCategories);
         let allMemories = [];
@@ -201,15 +181,14 @@ function remindForCategory(categoryName) {
                         }).join('\n\n====================\n\n');
                         const remindPrompt = `[CONTEXT_UPDATE]\nThe following are memories of our previous conversations under the categories: ${categoriesToRemind.join(", ")}. I am providing them to restore your context. Read and internalize them. Do not treat this as a question or a task.\n\nOnce you have processed this information, your ONLY response should be: "How can I help you today?"\n\n--- START MEMORIES ---\n\n${memoryText}\n\n--- END MEMORIES ---\n\nNow, provide only the confirmation message and await my next real prompt.`;
                         sendPromptToChatGPT(remindPrompt);
-                    } else {
-                        console.log(`No memories found for selected categories: ${categoriesToRemind.join(", ")}`);
                     }
                     selectedCategories.clear();
                     remindDebounceTimer = null;
                 }
             });
         });
-    }, 1000);
+    }
+    remindDebounceTimer = setTimeout(runReminderWhenInputReady, 0);
 }
 
 function injectCategoryRemindersUI() {
@@ -283,7 +262,7 @@ function injectCategoryRemindersUI() {
         svg.setAttribute('width', '24');
         svg.setAttribute('height', '24');
         svg.setAttribute('viewBox', '0 0 24 24');
-        svg.style.display = 'block';
+        svg.style.display = 'none';
         svg.style.margin = '0 auto';
         const bgCircle = document.createElementNS(svgNS, 'circle');
         bgCircle.setAttribute('cx', '12');
@@ -328,10 +307,12 @@ function injectCategoryRemindersUI() {
         }
         function startIndicator() {
             resetIndicator();
+            svg.style.display = 'block'; // Make SVG visible when selection starts
             if (timerInterval) clearInterval(timerInterval);
             timerInterval = setInterval(() => {
                 if (dropdown.style.display === 'none') {
                     clearInterval(timerInterval);
+                    svg.style.display = 'none'; // Hide SVG when dropdown closes
                     return;
                 }
                 remaining -= 0.1;
@@ -339,20 +320,64 @@ function injectCategoryRemindersUI() {
                     timerText.textContent = '0.0';
                     fgCircle.setAttribute('stroke-dashoffset', 2 * Math.PI * 10);
                     clearInterval(timerInterval);
+                    // Timer finished, send reminders for all selected categories
+                    sendAllSelectedCategoryReminders();
                 } else {
                     timerText.textContent = remaining.toFixed(1);
                     fgCircle.setAttribute('stroke-dashoffset', (2 * Math.PI * 10) * (1 - remaining / 1.0));
                 }
             }, 100);
         }
+        // Send reminders for all selected categories together after timer ends
+        function sendAllSelectedCategoryReminders() {
+            const categoriesToRemind = Array.from(selectedCategories);
+            if (categoriesToRemind.length === 0) return;
+            let allMemories = [];
+            let categoriesProcessed = 0;
+            categoriesToRemind.forEach(cat => {
+                getMemoriesForCategory(cat, (memoriesToRemind) => {
+                    if (memoriesToRemind.length > 0) {
+                        allMemories.push({
+                            category: cat,
+                            memories: memoriesToRemind
+                        });
+                    }
+                    categoriesProcessed++;
+                    if (categoriesProcessed === categoriesToRemind.length) {
+                        if (allMemories.length > 0) {
+                            let memoryText = allMemories.map(group => {
+                                return `Category: ${group.category}\n` + group.memories.map(m => `Title: ${m.title}\nInfo: ${m.info}`).join('\n\n---\n\n');
+                            }).join('\n\n====================\n\n');
+                            const remindPrompt = `[CONTEXT_UPDATE]\nThe following are memories of our previous conversations under the categories: ${categoriesToRemind.join(", ")}. I am providing them to restore your context. Read and internalize them. Do not treat this as a question or a task.\n\nOnce you have processed this information, your ONLY response should be: \"How can I help you today?\"\n\n--- START MEMORIES ---\n\n${memoryText}\n\n--- END MEMORIES ---\n\nNow, provide only the confirmation message and await my next real prompt.`;
+                            // Wait for chat input box before sending
+                            function trySendPrompt() {
+                                const inputDiv = document.getElementById('prompt-textarea');
+                                if (!inputDiv) {
+                                    setTimeout(trySendPrompt, 100);
+                                    return;
+                                }
+                                sendPromptToChatGPT(remindPrompt);
+                            }
+                            trySendPrompt();
+                        }
+                        selectedCategories.clear();
+                        updateButtonStyles();
+                    }
+                });
+            });
+        }
 
         // --- Patch remindForCategory to start indicator and update button styles ---
         const origRemindForCategory = remindForCategory;
-        remindForCategory = function(categoryName) {
-            origRemindForCategory(categoryName);
+        remindForCategory = function(categoryName, immediate = false) {
+            selectedCategories.add(categoryName);
             resetIndicator();
-            startIndicator();
             updateButtonStyles();
+            if (immediate) {
+                sendAllSelectedCategoryReminders();
+            } else {
+                startIndicator();
+            }
         };
 
         // --- Track and style selected buttons ---
@@ -426,19 +451,117 @@ function injectCategoryRemindersUI() {
         };
 
         document.body.appendChild(mainContainer);
-        console.log('ChatGPT Memory Ext: On-page widget injected.');
     });
+}
+
+// --- Helper: Check if current URL is root ChatGPT page (no path, only params allowed) ---
+function isRootChatGPTUrl() {
+    const url = new URL(window.location.href);
+    return (
+        url.hostname === "chatgpt.com" &&
+        (url.pathname === "/" || url.pathname === "") &&
+        (
+            url.search === "" ||
+            url.search === "?model=auto"
+        )
+    );
+}
+
+// --- Helper: Remind for 'default' if any memories exist ---
+function remindDefaultIfAny() {
+    getMemoriesForCategory('default', (memories) => {
+        if (memories && memories.length > 0) {
+            remindForCategory('default', true); // Send immediately for default
+        }
+    });
+}
+
+// --- Listen for URL changes (SPA navigation) ---
+function setupUrlChangeListener() {
+    let lastUrl = window.location.href;
+    const checkUrl = () => {
+        if (window.location.href !== lastUrl) {
+            lastUrl = window.location.href;
+            if (isRootChatGPTUrl()) {
+                remindDefaultIfAny();
+            }
+        }
+    };
+    // Patch pushState/replaceState
+    ['pushState', 'replaceState'].forEach(fn => {
+        const orig = history[fn];
+        history[fn] = function() {
+            const ret = orig.apply(this, arguments);
+            setTimeout(checkUrl, 100);
+            return ret;
+        };
+    });
+    // Listen for popstate and hashchange
+    window.addEventListener('popstate', () => setTimeout(checkUrl, 100));
+    window.addEventListener('hashchange', () => setTimeout(checkUrl, 100));
+    // Also poll as fallback
+    setInterval(checkUrl, 1000);
 }
 
 // --- Main initialization function ---
 function initialize() {
     loadProcessedIds();
-    
-    // Initialize the UI components
-    setTimeout(() => {
-        injectCategoryRemindersUI();
-        console.log("ChatGPT Memory Ext: Extension initialized and ready to process messages.");
-        console.log("Call processIncomingMessage(messageText, messageId) to process messages.");
-    }, 1000);
+    injectCategoryRemindersUI();
+    // On first load, check and remind if needed
+    if (isRootChatGPTUrl()) {
+        remindDefaultIfAny();
+    }
+    setupUrlChangeListener();
 }
+// --- Function to detect new messages and process them ---
+function detectNewMessages() {
+    const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+            mutation.addedNodes.forEach((node) => {
+                if (node.nodeType !== 1) return;
+                const assistantMessages = Array.from(node.querySelectorAll('div[data-message-author-role="assistant"]'));
+                if (node.matches('div[data-message-author-role="assistant"]')) {
+                    assistantMessages.push(node);
+                }
+                assistantMessages.forEach(msgNode => {
+                    const msgId = msgNode.getAttribute('data-message-id');
+                    const msgDiv = msgNode.querySelector('.markdown');
+                    if (!msgDiv) return;
+                    const msgText = msgDiv.innerText || "";
+                    console.log('[MemoryExt] Detected message:', { msgId, msgText });
+                    processMessage(msgText, msgId);
+                });
+            });
+            if (mutation.type === 'attributes' && mutation.target.matches('.markdown')) {
+                const assistantMessageNode = mutation.target.closest('div[data-message-author-role="assistant"]');
+                if (assistantMessageNode) {
+                    const msgId = assistantMessageNode.getAttribute('data-message-id');
+                    const msgDiv = assistantMessageNode.querySelector('.markdown');
+                    if (!msgDiv) return;
+                    const msgText = msgDiv.innerText || "";
+                    console.log('[MemoryExt] Detected message (attribute):', { msgId, msgText });
+                    processMessage(msgText, msgId);
+                }
+            }
+        });
+    });
+
+    const mainContent = document.querySelector('main');
+    if (mainContent) {
+        observer.observe(mainContent, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class']
+        });
+    } else {
+        // Try again as soon as possible
+        if (document.readyState === 'complete' || document.readyState === 'interactive') {
+            setTimeout(detectNewMessages, 100);
+        } else {
+            window.addEventListener('DOMContentLoaded', detectNewMessages, { once: true });
+        }
+    }
+}
+detectNewMessages();
 initialize();

@@ -8,6 +8,18 @@
         }
         h3 { margin-top: 15px; margin-bottom: 5px; }
         #memory-list { background: #343541; border-radius: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.18); padding: 0 0 8px 0; max-height: 300px; overflow-y: auto; }
+        /* Custom dark scrollbar for memory list */
+        #memory-list::-webkit-scrollbar {
+            width: 10px;
+            background: #23232b;
+        }
+        #memory-list::-webkit-scrollbar-thumb {
+            background: #393945;
+            border-radius: 8px;
+        }
+        #memory-list::-webkit-scrollbar-thumb:hover {
+            background: #444654;
+        }
         .memory-item { background: #393945; border-radius: 12px; margin: 10px 12px 0 12px; padding: 10px 12px 8px 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.10); border: none; transition: background 0.2s; }
         .memory-item.expanded { background: #444654; }
         .memory-title { font-weight: 600; font-size: 15px; margin-bottom: 4px; display: flex; align-items: center; border-radius: 8px; transition: background 0.18s; cursor: pointer; }
@@ -26,6 +38,31 @@
             cursor: pointer;
             transition: background 0.18s, color 0.18s;
         }
+        /* Custom dark scrollbar for memory list */
+        #memory-list::-webkit-scrollbar {
+            width: 10px;
+            background: #23232b;
+        }
+        #memory-list::-webkit-scrollbar-thumb {
+            background: #393945;
+            border-radius: 8px;
+        }
+        #memory-list::-webkit-scrollbar-thumb:hover {
+            background: #444654;
+        }
+        /* Minimal dark scrollbar for popup (outer scroll) */
+        body::-webkit-scrollbar, html::-webkit-scrollbar {
+            width: 10px;
+            background: #23232b;
+        }
+        body::-webkit-scrollbar-thumb, html::-webkit-scrollbar-thumb {
+            background: #393945;
+            border-radius: 8px;
+        }
+        body::-webkit-scrollbar-thumb:hover, html::-webkit-scrollbar-thumb:hover {
+            background: #444654;
+        }
+        }
         .memory-actions button:hover, .main-action-btn:hover, #add-category-btn:hover {
             background: #393945;
             color: #fff;
@@ -39,8 +76,8 @@
         /* Category Management Styles */
         .category-management { padding: 10px; background: #444654; border-radius: 8px; margin-bottom: 15px; }
         .category-management h3 { margin-top: 0; }
-        #add-category-btn { padding: 8px 12px; background: #23232b; color: #ececf1; border: none; border-radius: 10px; cursor: pointer; }
-        
+        #add-category-btn { padding: 8px 12px; height: 32px; background: #23232b; color: #ececf1; border: none; border-radius: 10px; cursor: pointer; }
+
         /* Styles for category tags */
         .memory-categories-container { margin-top: 6px; }
         .category-tag {
@@ -97,8 +134,8 @@
     `;
     document.head.appendChild(style);
 })();
-const PROMPT_LAST_EXCHANGE = `[SYSTEM_COMMAND]\nAnalyze ONLY the last user message and your last response. Your task is to extract the most critical, reusable piece of information, a key decision, or a core fact that should be remembered for future context.\n\nStrictly format your output as a memory object within the specified markers. Do not add any conversational text or explanations before or after the markers.\n\nThe format is:\n[START_MEMORY]\nTitle: [A concise, descriptive title for the memory, 5-10 words]\nInfo: [A detailed but brief summary of the information to be remembered.]\n[END_MEMORY]`;
-const PROMPT_WHOLE_CHAT = `[SYSTEM_COMMAND]\nAnalyze our ENTIRE conversation history up to this point. Your task is to identify and synthesize the most globally important facts, user preferences, or overarching goals.\n\nStrictly format your output as a memory object within the specified markers. Do not add any conversational text or explanations before or after the markers.\n\nThe format is:\n[START_MEMORY]\nTitle: [A concise, descriptive title for the overall chat memory, 5-10 words]\nInfo: [A bulleted or paragraph summary of the most critical, high-level information from the entire chat.]\n[END_MEMORY]`;
+const PROMPT_LAST_EXCHANGE = `[SYSTEM_COMMAND]\nYou are strictly forbidden from creating, updating, or outputting any memory object unless you are explicitly instructed to do so using a prompt like this one.\n\nAnalyze ONLY the last user message and your last response. Extract the single most critical, reusable piece of information, a key decision, or a core fact that should be remembered for future context.\n\nYou MUST output ONLY a memory object, strictly within the [START_MEMORY] and [END_MEMORY] markers, and absolutely nothing else. Do NOT add any conversational text, explanations, or any output outside the markers.\n\nIf you are not explicitly asked using this prompt, do NOT create or update any memory.\n\nFormat:\n[START_MEMORY]\nTitle: [A concise, descriptive title for the memory, 5-10 words]\nInfo: [A detailed but brief summary of the information to be remembered.]\n[END_MEMORY]`;
+const PROMPT_WHOLE_CHAT = `[SYSTEM_COMMAND]\nYou are strictly forbidden from creating, updating, or outputting any memory object unless you are explicitly instructed to do so using a prompt like this one.\n\nAnalyze our ENTIRE conversation history up to this point. Identify and synthesize only the most globally important facts, user preferences, or overarching goals.\n\nYou MUST output ONLY a memory object, strictly within the [START_MEMORY] and [END_MEMORY] markers, and absolutely nothing else. Do NOT add any conversational text, explanations, or any output outside the markers.\n\nIf you are not explicitly asked using this prompt, do NOT create or update any memory.\n\nFormat:\n[START_MEMORY]\nTitle: [A concise, descriptive title for the overall chat memory, 5-10 words]\nInfo: [A bulleted or paragraph summary of the most critical, high-level information from the entire chat.]\n[END_MEMORY]`;
 
 let allMemoriesCache = [];
 let allCategoriesCache = [];
@@ -140,13 +177,16 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // Color generation function
-function stringToHslColor(str, s = 60, l = 45) {
+function stringToHslColor(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
-    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    hash = str.charCodeAt(i) + ((hash << 7) - hash) + ((hash << 3) - hash);
   }
-  const h = hash % 360;
-  return `hsl(${h}, ${s}%, ${l}%)`;
+  // Use more bits for hue, saturation, and lightness
+  const h = Math.abs(hash) % 360;
+  const s2 = 55 + (Math.abs(hash >> 8) % 30); // 55-85%
+  const l2 = 40 + (Math.abs(hash >> 16) % 20); // 40-60%
+  return `hsl(${h}, ${s2}%, ${l2}%)`;
 }
 
 
@@ -179,18 +219,15 @@ function handleMemoryListClick(e) {
     // Update button logic
     if (e.target.matches('.update-btn')) {
         updatingMemoryId = memoryItem.dataset.id;
-        scrollToGenerateMemorySection();
         showUpdatingMemoryBanner(updatingMemoryId);
+        scrollToGenerateMemorySection();
         return;
     }
 }
 
 function scrollToGenerateMemorySection() {
-    // Scroll to the generate memory section
-    const generateSection = document.getElementById('generate-buttons');
-    if (generateSection) {
-        generateSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
+    // Scroll to bottom of the popup page
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
 }
 
 function showUpdatingMemoryBanner(memoryId) {
@@ -240,11 +277,6 @@ function renderMemories(memories) {
 
         // Add a flex container for actions and update button
         itemDiv.innerHTML = `
-                        <span>
-                    <input type="checkbox" class="memory-checkbox" />
-                    ${memory.id}
-                </span>
-
             <div class="memory-title">
                 <span>
                     <input type="checkbox" class="memory-checkbox" />
@@ -263,7 +295,10 @@ function renderMemories(memories) {
                     <button class="save-edit-btn" style="display:none;">Save</button>
                     <button class="cancel-edit-btn" style="display:none;">Cancel</button>
                 </div>
-                <button class="update-btn" style="margin-left:auto; background: #10a37f; color: #fff; border-radius: 10px; padding: 4px 14px; font-size: 12px; cursor: pointer;">Update</button>
+                <div class="memory-actions">
+                    <button class="update-btn">Update</button>
+                </div>
+                
             </div>
         `;
         memoryListDiv.appendChild(itemDiv);
@@ -399,10 +434,59 @@ function addNewCategory() {
     }
 }
 
-function deleteMemory(id) {
-    if (!confirm('Are you sure you want to delete this memory?')) return;
-    const updatedMemories = allMemoriesCache.filter(mem => mem.id !== id);
-    chrome.storage.local.set({ memories: updatedMemories }, loadData);
+
+function showDeleteConfirmDialog(id) {
+    // Remove any existing modal
+    const oldModal = document.getElementById('delete-memory-modal');
+    if (oldModal) oldModal.remove();
+
+    const modal = document.createElement('div');
+    modal.id = 'delete-memory-modal';
+    modal.style.position = 'fixed';
+    modal.style.top = '0';
+    modal.style.left = '0';
+    modal.style.width = '100vw';
+    modal.style.height = '100vh';
+    modal.style.background = 'rgba(0,0,0,0.35)';
+    modal.style.display = 'flex';
+    modal.style.alignItems = 'center';
+    modal.style.justifyContent = 'center';
+    modal.style.zIndex = '9999';
+
+    modal.innerHTML = `
+        <div style="background:#23232b; color:#fff; padding:32px 28px; border-radius:14px; box-shadow:0 2px 16px #0008; min-width:320px; text-align:center;">
+            <div style="font-size:17px; margin-bottom:18px;">Delete this memory?</div>
+            <div style="margin-bottom:22px; font-size:13px; color:#ffe082;">This action cannot be undone.</div>
+            <button id="confirm-delete-btn" style="background:#ff5c5c; color:#fff; border:none; border-radius:8px; padding:7px 22px; font-size:15px; margin-right:18px; cursor:pointer;">Delete</button>
+            <button id="cancel-delete-btn" style="background:#393945; color:#fff; border:none; border-radius:8px; padding:7px 22px; font-size:15px; cursor:pointer;">Cancel</button>
+        </div>
+    `;
+    document.body.appendChild(modal);
+
+    document.getElementById('confirm-delete-btn').onclick = function() {
+        modal.remove();
+        deleteMemory(id, true);
+    };
+    document.getElementById('cancel-delete-btn').onclick = function() {
+        modal.remove();
+    };
+}
+
+function deleteMemory(id, skipConfirm) {
+    if (!skipConfirm) {
+        showDeleteConfirmDialog(id);
+        return;
+    }
+    // Remove from cache in-place
+    const idx = allMemoriesCache.findIndex(mem => mem.id === id);
+    if (idx !== -1) {
+        allMemoriesCache.splice(idx, 1);
+        // Remove from DOM directly for instant feedback
+        const itemDiv = document.querySelector(`.memory-item[data-id="${id}"]`);
+        if (itemDiv && itemDiv.parentNode) itemDiv.parentNode.removeChild(itemDiv);
+        // Save updated array to storage
+        chrome.storage.local.set({ memories: allMemoriesCache });
+    }
 }
 
 function toggleEditMode(itemDiv, isEditing) {
@@ -511,9 +595,7 @@ function handleGenerateMemory(type) {
         const memory = allMemoriesCache.find(m => m.id === updatingMemoryId);
         if (memory) {
             // Add update context to the prompt with [START_MEMORY_EDIT] and Id, and [END_MEMORY_EDIT]
-            prompt = `[MEMORY_UPDATE_REQUEST]\nYou are about to update the following memory based on the latest context.\n\n--- MEMORY TO UPDATE ---\nId: ${memory.id}\nTitle: ${memory.title}\nInfo: ${memory.info}\n--- END MEMORY ---\n\nAnalyze the latest context (last exchange or whole chat as selected) and update the memory accordingly. Do NOT create a new memory, but provide the updated Id, title and info in the same format, using [START_MEMORY_EDIT] and [END_MEMORY_EDIT] tags.\n\nFormat:\n[START_MEMORY_EDIT]\nId: [id]\nTitle: [title]\nInfo: [info]\n[END_MEMORY_EDIT]\n\n` + prompt;
-            prompt.replaceAll('[START_MEMORY]', '[START_MEMORY_EDIT]');
-            prompt.replaceAll('[END_MEMORY]', '[END_MEMORY_EDIT]');
+            prompt = `[MEMORY_UPDATE_REQUEST]\nYou are strictly forbidden from creating any new memory object or outputting anything except the updated memory edit, and only if you are explicitly instructed to do so using this prompt.\n\nYou are about to update the following memory based on the latest context.\n\n--- MEMORY TO UPDATE ---\nId: ${memory.id}\nTitle: ${memory.title}\nInfo: ${memory.info}\n--- END MEMORY ---\n\nAnalyze the latest context (last exchange or whole chat as selected) and update the memory accordingly.\n\nYou MUST output ONLY the updated memory, strictly within the [START_MEMORY_EDIT] and [END_MEMORY_EDIT] markers, and absolutely nothing else. Do NOT create a new memory, do NOT output any conversational text, explanations, or any output outside the markers.\n\nIf you are not explicitly asked using this prompt, do NOT create or update any memory.\n\nFormat:\n[START_MEMORY_EDIT]\nId: [id]\nTitle: [title]\nInfo: [info]\n[END_MEMORY_EDIT]\n\n` + prompt;
         }
     }
     if (customInstruction) {

@@ -2,6 +2,9 @@
 
 A Chrome extension to enhance your ChatGPT experience by providing a persistent memory bank for your conversations. This extension allows you to save, categorize, and remind ChatGPT of important information from previous chats, restoring context and improving continuity.
 
+## Why I Created This Extension
+I spent my precious time building this because OpenAI can't do shit and made ChatGPT keeps hallucinating.
+
 ## Features
 - **Memory Bank**: Save important messages from ChatGPT conversations.
 - **Categories**: Organize memories into categories for easy retrieval.
