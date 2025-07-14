@@ -1,6 +1,5 @@
 // --- In-memory cache of persistent IDs ---
 let processedIdsSet = new Set();
-let lastUrl = ''; // Initialize as empty to ensure the first check always runs
 
 // --- Function to load already-processed IDs from persistent storage ---
 function loadProcessedIds() {
@@ -15,6 +14,9 @@ function loadProcessedIds() {
 // --- Listener for commands from the popup ---
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'generateMemory' || request.action === 'remind') {
+        sendPromptToChatGPT(request.prompt);
+    } else if (request.action === 'updateMemory' && request.memoryId) {
+        window.__memoryUpdateTargetId = request.memoryId;
         sendPromptToChatGPT(request.prompt);
     }
 });
@@ -39,34 +41,61 @@ function sendPromptToChatGPT(prompt) {
     }, 250);
 }
 
-// --- Observer to watch for AI responses (for memory creation) ---
-const observer = new MutationObserver((mutations) => {
-    mutations.forEach((mutation) => {
-        const processNode = (node) => {
-            if (node.nodeType !== 1) return;
-            const assistantMessages = Array.from(node.querySelectorAll('div[data-message-author-role="assistant"]'));
-            if (node.matches('div[data-message-author-role="assistant"]')) {
-                assistantMessages.push(node);
-            }
-            assistantMessages.forEach(processMessage);
-        };
-        mutation.addedNodes.forEach(processNode);
-    });
-});
+// --- Simplified message processing function ---
+// This function will be called with messageText and messageId from external detection
+function processIncomingMessage(messageText, messageId) {
+    console.log(`ChatGPT Memory Ext: Processing message ID: ${messageId}`);
+    processMessage(messageText, messageId);
+}
 
 // --- Function to process a potential message ---
-function processMessage(messageNode) {
-    const messageId = messageNode.getAttribute('data-message-id');
+function processMessage(messageText, messageId) {
     if (!messageId || processedIdsSet.has(messageId)) return;
 
-    const messageDiv = messageNode.querySelector('.markdown');
-    if (!messageDiv) return;
-
-    const messageText = messageDiv.innerText || "";
-
+    // Handle [START_MEMORY_EDIT] for updates
+    if (messageText.includes('[START_MEMORY_EDIT]') && (messageText.includes('[END_MEMORY_EDIT]'))) {
+        console.log(`ChatGPT Memory Ext: Processing memory update for message ID: ${messageId}`);
+        const memoryContent = messageText.substring(
+            messageText.indexOf('[START_MEMORY_EDIT]') + '[START_MEMORY_EDIT]'.length,
+            messageText.indexOf('[END_MEMORY_EDIT]')
+        ).trim();
+        const idMatch = memoryContent.match(/Id:\s*(.*)/);
+        const titleMatch = memoryContent.match(/Title:\s*(.*)/);
+        const infoMatch = memoryContent.match(/Info:\s*([\s\S]*)/);
+        if (idMatch && titleMatch && infoMatch) {
+            const memoryObj = {
+                id: idMatch[1].trim(),
+                title: titleMatch[1].trim(),
+                info: memoryContent.substring(infoMatch.index + 'Info:'.length).trim(),
+                url: window.location.href,
+                categories: ['default']
+            };
+            chrome.storage.local.get(['memories', 'savedMemoryMessageIds'], (result) => {
+                let memories = result.memories || [];
+                const savedIds = Array.from(processedIdsSet);
+                const idx = memories.findIndex(m => m.id === memoryObj.id);
+                if (idx !== -1) {
+                    memories[idx] = { ...memories[idx], ...memoryObj };
+                    chrome.storage.local.set({ memories, savedMemoryMessageIds: savedIds }, () => {
+                        console.log('Successfully updated memory (by tag):', memoryObj.id);
+                        chrome.runtime.sendMessage({ action: 'memory_updated' });
+                        chrome.notifications.create({
+                            type: 'basic',
+                            iconUrl: 'icons/icon48.png',
+                            title: 'ChatGPT Memory Updated!',
+                            message: `Memory "${memoryObj.title}" was updated.`
+                        });
+                    });
+                }
+            });
+        }
+        return;
+    }
+    
+    // Handle [START_MEMORY] for new memories (or legacy update)
     if (messageText.includes('[START_MEMORY]') && messageText.includes('[END_MEMORY]')) {
+        console.log(`ChatGPT Memory Ext: Processing new memory for message ID: ${messageId}`);
         if (messageText.includes('[CONTEXT_UPDATE]')) return;
-        
         processedIdsSet.add(messageId);
 
         const memoryContent = messageText.substring(
@@ -76,34 +105,47 @@ function processMessage(messageNode) {
 
         const titleMatch = memoryContent.match(/Title:\s*(.*)/);
         const infoMatch = memoryContent.match(/Info:\s*([\s\S]*)/);
-        
         if (titleMatch && infoMatch) {
-            const newMemory = {
-                id: new Date().toISOString(),
+            const memoryObj = {
                 title: titleMatch[1].trim(),
                 info: memoryContent.substring(infoMatch.index + 'Info:'.length).trim(),
                 url: window.location.href,
-                categories: ['default'] 
             };
-
             chrome.storage.local.get(['memories', 'savedMemoryMessageIds'], (result) => {
-                const memories = result.memories || [];
+                let memories = result.memories || [];
                 const savedIds = Array.from(processedIdsSet);
-                memories.push(newMemory);
-
-                chrome.storage.local.set({ 
-                    memories: memories, 
-                    savedMemoryMessageIds: savedIds 
-                }, () => {
-                    console.log('Successfully saved memory and its ID:', messageId);
-                    chrome.runtime.sendMessage({ action: 'memory_created' });
-                    chrome.notifications.create({
-                        type: 'basic',
-                        iconUrl: 'icons/icon48.png',
-                        title: 'ChatGPT Memory Saved!',
-                        message: `Memory "${newMemory.title}" added to 'default' category.`
+                if (window.__memoryUpdateTargetId) {
+                    // Update existing memory (legacy)
+                    const idx = memories.findIndex(m => m.id === window.__memoryUpdateTargetId);
+                    if (idx !== -1) {
+                        memories[idx] = { ...memories[idx], ...memoryObj };
+                        chrome.storage.local.set({ memories, savedMemoryMessageIds: savedIds }, () => {
+                            console.log('Successfully updated memory:', window.__memoryUpdateTargetId);
+                            chrome.runtime.sendMessage({ action: 'memory_updated' });
+                            chrome.notifications.create({
+                                type: 'basic',
+                                iconUrl: 'icons/icon48.png',
+                                title: 'ChatGPT Memory Updated!',
+                                message: `Memory "${memoryObj.title}" was updated.`
+                            });
+                        });
+                    }
+                    window.__memoryUpdateTargetId = null;
+                } else {
+                    // Add new memory
+                    const newMemory = { id: new Date().toISOString(), ...memoryObj };
+                    memories.push(newMemory);
+                    chrome.storage.local.set({ memories, savedMemoryMessageIds: savedIds }, () => {
+                        console.log('Successfully saved memory and its ID:', messageId);
+                        chrome.runtime.sendMessage({ action: 'memory_created' });
+                        chrome.notifications.create({
+                            type: 'basic',
+                            iconUrl: 'icons/icon48.png',
+                            title: 'ChatGPT Memory Saved!',
+                            message: `Memory "${newMemory.title}" added to 'default' category.`
+                        });
                     });
-                });
+                }
             });
         }
     }
@@ -388,88 +430,15 @@ function injectCategoryRemindersUI() {
     });
 }
 
-// --- NEW: Function to wait for the page to be ready and then remind ---
-function scheduleDefaultReminder() {
-    console.log("Scheduling reminder for 'default' category. Waiting for input box...");
-    
-    // Check if input is already there
-    if (document.getElementById('prompt-textarea')) {
-        console.log("Input box found immediately. Reminding now.");
-        remindForCategory('default');
-        return;
-    }
-
-    // If not, wait for it to appear
-    const pageReadyObserver = new MutationObserver((mutations, observer) => {
-        if (document.getElementById('prompt-textarea')) {
-            console.log("Input box has appeared. Reminding now.");
-            remindForCategory('default');
-            observer.disconnect(); // Clean up: stop observing once done
-        }
-    });
-
-    pageReadyObserver.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
-}
-
-// --- REVISED: Check for New Chat URL logic ---
-function checkForNewChat() {
-    const currentUrl = window.location.href;
-    if (currentUrl === lastUrl) {
-        return; // No change, do nothing.
-    }
-
-    try {
-        const url = new URL(currentUrl);
-        const isCurrentPageNewChat = (url.pathname === '/' || url.pathname.startsWith('/?'));
-        
-        let shouldTriggerReminder = false;
-
-        if (lastUrl === '') {
-            // Initial page load
-            if (isCurrentPageNewChat) {
-                shouldTriggerReminder = true;
-                console.log("ChatGPT Memory Ext: New chat detected on initial load.");
-            }
-        } else {
-            // Navigation
-            const oldUrl = new URL(lastUrl);
-            const wasPreviousPageChat = oldUrl.pathname.startsWith('/c/');
-            if (isCurrentPageNewChat && wasPreviousPageChat) {
-                shouldTriggerReminder = true;
-                console.log("ChatGPT Memory Ext: New chat detected via navigation.");
-            }
-        }
-        
-        if (shouldTriggerReminder) {
-            // --- CHANGED: Use the new scheduler instead of setTimeout ---
-            scheduleDefaultReminder();
-        }
-    } catch(e) {
-        console.error("URL parsing error", e);
-    }
-    
-    lastUrl = currentUrl;
-}
-
 // --- Main initialization function ---
 function initialize() {
     loadProcessedIds();
     
-    const mainContent = document.querySelector('main');
-    if (mainContent) {
-        observer.observe(mainContent, { childList: true, subtree: true });
-        console.log("ChatGPT Memory Ext: Response observer started.");
+    // Initialize the UI components
+    setTimeout(() => {
         injectCategoryRemindersUI();
-    } else {
-        setTimeout(initialize, 1000);
-        return;
-    }
-
-    checkForNewChat(); 
-    setInterval(checkForNewChat, 1000);
+        console.log("ChatGPT Memory Ext: Extension initialized and ready to process messages.");
+        console.log("Call processIncomingMessage(messageText, messageId) to process messages.");
+    }, 1000);
 }
-
 initialize();

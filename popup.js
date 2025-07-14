@@ -97,13 +97,13 @@
     `;
     document.head.appendChild(style);
 })();
-
 const PROMPT_LAST_EXCHANGE = `[SYSTEM_COMMAND]\nAnalyze ONLY the last user message and your last response. Your task is to extract the most critical, reusable piece of information, a key decision, or a core fact that should be remembered for future context.\n\nStrictly format your output as a memory object within the specified markers. Do not add any conversational text or explanations before or after the markers.\n\nThe format is:\n[START_MEMORY]\nTitle: [A concise, descriptive title for the memory, 5-10 words]\nInfo: [A detailed but brief summary of the information to be remembered.]\n[END_MEMORY]`;
 const PROMPT_WHOLE_CHAT = `[SYSTEM_COMMAND]\nAnalyze our ENTIRE conversation history up to this point. Your task is to identify and synthesize the most globally important facts, user preferences, or overarching goals.\n\nStrictly format your output as a memory object within the specified markers. Do not add any conversational text or explanations before or after the markers.\n\nThe format is:\n[START_MEMORY]\nTitle: [A concise, descriptive title for the overall chat memory, 5-10 words]\nInfo: [A bulleted or paragraph summary of the most critical, high-level information from the entire chat.]\n[END_MEMORY]`;
 
 let allMemoriesCache = [];
 let allCategoriesCache = [];
 let selectedCategoryFilters = new Set();
+let updatingMemoryId = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     document.body.innerHTML = `
@@ -119,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
         <div id="selected-category-filter"></div>
         <div id="memory-list"></div>
         <div id="remind-container" style="margin-top: 10px;"></div>
+        <div id="updating-memory-banner" style="display:none; margin: 10px 0; padding: 8px 12px; background: #23232b; color: #fff; border-radius: 8px; font-size: 14px;"></div>
         <h3>Generate Memory</h3>
         <input id="customInstruction" type="text" placeholder="Enter specific instruction (optional)">
         <div id="generate-buttons" style="display: flex; gap: 10px; margin-top: 8px;">
@@ -130,12 +131,11 @@ document.addEventListener('DOMContentLoaded', () => {
     loadData();
     document.getElementById('add-category-btn').addEventListener('click', addNewCategory);
     document.getElementById('memorySearch').addEventListener('input', filterMemories);
-    document.getElementById('saveLastBtn').addEventListener('click', () => sendMessageToContentScript({ action: 'generateMemory', prompt: PROMPT_LAST_EXCHANGE }));
-    document.getElementById('saveChatBtn').addEventListener('click', () => sendMessageToContentScript({ action: 'generateMemory', prompt: PROMPT_WHOLE_CHAT }));
+    document.getElementById('saveLastBtn').addEventListener('click', () => handleGenerateMemory('last'));
+    document.getElementById('saveChatBtn').addEventListener('click', () => handleGenerateMemory('whole'));
     chrome.runtime.onMessage.addListener((message) => {
-        if (message.action === 'memory_created') loadData();
+        if (message.action === 'memory_created' || message.action === 'memory_updated') loadData();
     });
-    
     document.getElementById('memory-list').addEventListener('click', handleMemoryListClick);
 });
 
@@ -169,7 +169,6 @@ function handleMemoryListClick(e) {
     if (e.target.matches('.edit-btn')) toggleEditMode(memoryItem, true);
     if (e.target.matches('.save-edit-btn')) saveMemoryChanges(memoryItem, memoryId);
     if (e.target.matches('.cancel-edit-btn')) toggleEditMode(memoryItem, false);
-    
     // "Go to Chat" button logic
     if (e.target.matches('.go-to-chat-btn')) {
         const memory = allMemoriesCache.find(m => m.id === memoryId);
@@ -177,6 +176,34 @@ function handleMemoryListClick(e) {
             chrome.tabs.create({ url: memory.url });
         }
     }
+    // Update button logic
+    if (e.target.matches('.update-btn')) {
+        updatingMemoryId = memoryItem.dataset.id;
+        scrollToGenerateMemorySection();
+        showUpdatingMemoryBanner(updatingMemoryId);
+        return;
+    }
+}
+
+function scrollToGenerateMemorySection() {
+    // Scroll to the generate memory section
+    const generateSection = document.getElementById('generate-buttons');
+    if (generateSection) {
+        generateSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+}
+
+function showUpdatingMemoryBanner(memoryId) {
+    const banner = document.getElementById('updating-memory-banner');
+    if (!banner) return;
+    const memory = allMemoriesCache.find(m => m.id === memoryId);
+    if (!memory) return;
+    banner.innerHTML = `Updating memory: <b>${memory.title}</b> <button id="cancel-update-btn" style="margin-left:10px; background:none; color:#ff5c5c; border:none; font-size:16px; cursor:pointer;">&times;</button>`;
+    banner.style.display = 'block';
+    document.getElementById('cancel-update-btn').onclick = function() {
+        updatingMemoryId = null;
+        banner.style.display = 'none';
+    };
 }
 
 function loadData() {
@@ -211,7 +238,13 @@ function renderMemories(memories) {
             `<span class="category-tag" style="background-color: ${stringToHslColor(cat)};">${cat}</span>`
         ).join('');
 
+        // Add a flex container for actions and update button
         itemDiv.innerHTML = `
+                        <span>
+                    <input type="checkbox" class="memory-checkbox" />
+                    ${memory.id}
+                </span>
+
             <div class="memory-title">
                 <span>
                     <input type="checkbox" class="memory-checkbox" />
@@ -222,12 +255,15 @@ function renderMemories(memories) {
             <div class="memory-info">
                 <pre>${memory.info}</pre>
             </div>
-            <div class="memory-actions">
-                <button class="edit-btn">Edit</button>
-                <button class="delete-btn">Delete</button>
-                <button class="go-to-chat-btn" ${memory.url ? '' : 'style="display:none;"'}>Go to Chat</button>
-                <button class="save-edit-btn" style="display:none;">Save</button>
-                <button class="cancel-edit-btn" style="display:none;">Cancel</button>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div class="memory-actions">
+                    <button class="edit-btn">Edit</button>
+                    <button class="delete-btn">Delete</button>
+                    <button class="go-to-chat-btn" ${memory.url ? '' : 'style=\"display:none;\"'}>Go to Chat</button>
+                    <button class="save-edit-btn" style="display:none;">Save</button>
+                    <button class="cancel-edit-btn" style="display:none;">Cancel</button>
+                </div>
+                <button class="update-btn" style="margin-left:auto; background: #10a37f; color: #fff; border-radius: 10px; padding: 4px 14px; font-size: 12px; cursor: pointer;">Update</button>
             </div>
         `;
         memoryListDiv.appendChild(itemDiv);
@@ -465,4 +501,27 @@ function deleteCategory(cat) {
         memory_categories: newCategories,
         memories: newMemories
     }, loadData);
+}
+
+function handleGenerateMemory(type) {
+    const customInstruction = document.getElementById('customInstruction').value.trim();
+    let prompt = type === 'last' ? PROMPT_LAST_EXCHANGE : PROMPT_WHOLE_CHAT;
+    if (updatingMemoryId) {
+        // Find the memory being updated
+        const memory = allMemoriesCache.find(m => m.id === updatingMemoryId);
+        if (memory) {
+            // Add update context to the prompt with [START_MEMORY_EDIT] and Id, and [END_MEMORY_EDIT]
+            prompt = `[MEMORY_UPDATE_REQUEST]\nYou are about to update the following memory based on the latest context.\n\n--- MEMORY TO UPDATE ---\nId: ${memory.id}\nTitle: ${memory.title}\nInfo: ${memory.info}\n--- END MEMORY ---\n\nAnalyze the latest context (last exchange or whole chat as selected) and update the memory accordingly. Do NOT create a new memory, but provide the updated Id, title and info in the same format, using [START_MEMORY_EDIT] and [END_MEMORY_EDIT] tags.\n\nFormat:\n[START_MEMORY_EDIT]\nId: [id]\nTitle: [title]\nInfo: [info]\n[END_MEMORY_EDIT]\n\n` + prompt;
+            prompt.replaceAll('[START_MEMORY]', '[START_MEMORY_EDIT]');
+            prompt.replaceAll('[END_MEMORY]', '[END_MEMORY_EDIT]');
+        }
+    }
+    if (customInstruction) {
+        prompt += `\n\n[USER_INSTRUCTION]\n${customInstruction}`;
+    }
+    if (updatingMemoryId) {
+        sendMessageToContentScript({ action: 'updateMemory', prompt, memoryId: updatingMemoryId });
+    } else {
+        sendMessageToContentScript({ action: 'generateMemory', prompt });
+    }
 }
